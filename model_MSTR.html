@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MSTR Valuation Terminal v2.3 // Target Price Logic</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
+
+    <style>
+        :root {
+            --bg-dark: #050505;
+            --glass-bg: rgba(20, 20, 30, 0.75);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --glass-highlight: rgba(255, 255, 255, 0.15);
+            --neon-green: #00ff9d;
+            --neon-red: #ff0055;
+            --neon-blue: #00f3ff;
+            --neon-purple: #bc13fe;
+            --neon-orange: #ff9f1c;
+            --text-primary: #ffffff;
+            --text-muted: #8899a6;
+            --font-display: 'JetBrains Mono', monospace;
+            --font-body: 'Inter', sans-serif;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            background-color: var(--bg-dark);
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(76, 29, 149, 0.15), transparent 25%),
+                radial-gradient(circle at 85% 30%, rgba(14, 165, 233, 0.15), transparent 25%);
+            color: var(--text-primary);
+            font-family: var(--font-body);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            overflow-x: hidden;
+            perspective: 1000px;
+        }
+
+        /* --- UTILS & ANIMATIONS --- */
+        @keyframes breathe {
+            0%, 100% { box-shadow: 0 8px 32px 0 rgba(0,0,0,0.5); border-color: var(--glass-border); }
+            50% { box-shadow: 0 8px 40px 0 rgba(0, 243, 255, 0.1); border-color: rgba(0, 243, 255, 0.2); }
+        }
+        .alive { animation: breathe 4s ease-in-out infinite; }
+        
+        #boot-screen {
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: #020202;
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: opacity 0.5s ease-out;
+        }
+
+        .boot-loader {
+            width: 200px;
+            height: 2px;
+            background: #222;
+            margin-bottom: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+        .boot-loader::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; height: 100%; width: 50%;
+            background: var(--neon-blue);
+            animation: load 1s infinite linear;
+        }
+        @keyframes load { 0% { left: -50%; } 100% { left: 100%; } }
+
+        .boot-btn {
+            background: transparent;
+            border: 1px solid var(--neon-blue);
+            color: var(--neon-blue);
+            padding: 15px 30px;
+            font-family: var(--font-display);
+            font-size: 1rem;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            transition: 0.3s;
+            box-shadow: 0 0 15px rgba(0, 243, 255, 0.1);
+        }
+        .boot-btn:hover {
+            background: var(--neon-blue);
+            color: #000;
+            box-shadow: 0 0 40px rgba(0, 243, 255, 0.5);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 40px auto;
+            padding: 20px;
+            opacity: 0;
+            transform: scale(0.98);
+            transition: opacity 0.5s ease-out, transform 0.5s ease-out;
+        }
+        .container.visible { opacity: 1; transform: scale(1); }
+
+        /* --- GLASS PANELS --- */
+        .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 25px;
+            box-shadow: 0 10px 40px -10px rgba(0,0,0,0.6);
+            margin-bottom: 25px;
+            position: relative;
+        }
+        
+        .glass-panel h3 {
+            margin: 0 0 20px 0;
+            font-family: var(--font-display);
+            color: var(--neon-blue);
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-badge {
+            background: rgba(255,255,255,0.05);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            color: var(--text-muted);
+        }
+
+        /* --- LAYOUT GRID --- */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 360px 1fr;
+            gap: 25px;
+        }
+
+        /* --- CONTROLS STYLING --- */
+        .controls-scroll {
+            max-height: 75vh;
+            overflow-y: auto;
+            padding-right: 10px;
+        }
+        
+        .controls-scroll::-webkit-scrollbar { width: 4px; }
+        .controls-scroll::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+        .controls-scroll::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+        .control-group {
+            margin-bottom: 25px;
+            padding: 15px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.02);
+        }
+
+        .group-header {
+            font-family: var(--font-display);
+            font-size: 0.75rem;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+
+        .input-row { margin-bottom: 15px; }
+        .input-row:last-child { margin-bottom: 0; }
+        
+        .input-row label {
+            display: flex;
+            justify-content: space-between;
+            color: var(--text-muted);
+            font-family: var(--font-display);
+            font-size: 0.7rem;
+            margin-bottom: 8px;
+            align-items: center;
+        }
+
+        .value-display {
+            color: var(--text-primary);
+            font-weight: bold;
+            background: rgba(255,255,255,0.05);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+        }
+        
+        .live-tag {
+            font-size: 0.6rem; 
+            color: var(--neon-green); 
+            border: 1px solid var(--neon-green);
+            padding: 1px 4px;
+            border-radius: 3px;
+            margin-left: 5px;
+            display: none;
+        }
+        .live-tag.active { display: inline-block; }
+
+        /* --- INPUT STYLING --- */
+        input[type="number"] {
+            width: 100%;
+            background: rgba(0,0,0,0.4);
+            border: 1px solid var(--glass-border);
+            color: var(--text-primary);
+            font-family: var(--font-display);
+            padding: 8px 12px;
+            border-radius: 6px;
+            outline: none;
+            transition: 0.3s;
+            font-size: 0.85rem;
+        }
+        input[type="number"]:focus {
+            border-color: var(--neon-blue);
+            box-shadow: 0 0 10px rgba(0, 243, 255, 0.1);
+        }
+
+        input[type="range"] {
+            width: 100%;
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        input[type="range"]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 2px;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 14px;
+            width: 14px;
+            border-radius: 50%;
+            background: var(--text-primary);
+            margin-top: -5px;
+            cursor: pointer;
+            border: 2px solid var(--bg-dark);
+            transition: transform 0.1s, background 0.3s;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover { 
+            transform: scale(1.2); 
+            background: var(--neon-blue);
+        }
+
+        /* --- ACTION BUTTON --- */
+        .run-button {
+            width: 100%;
+            background: rgba(0, 243, 255, 0.08);
+            color: var(--neon-blue);
+            border: 1px solid var(--neon-blue);
+            padding: 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: var(--font-display);
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            transition: all 0.2s;
+            margin-top: 15px;
+            font-size: 0.8rem;
+            position: relative;
+            overflow: hidden;
+        }
+        .run-button:hover {
+            background: var(--neon-blue);
+            color: #000;
+            box-shadow: 0 0 30px rgba(0, 243, 255, 0.4);
+        }
+
+        /* --- RESULTS --- */
+        .results-summary {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .result-card {
+            background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 15px;
+            text-align: center;
+            transition: transform 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+        .result-card::before {
+            content: ''; position: absolute; top:0; left:0; width:100%; height:2px;
+            background: currentColor; opacity: 0.5;
+        }
+        
+        .result-card h4 {
+            font-family: var(--font-display);
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            margin: 0 0 8px 0;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .result-card .price {
+            font-family: var(--font-display);
+            font-size: 1.5rem;
+            font-weight: 800;
+            margin-bottom: 4px;
+        }
+
+        .result-card .subtext {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-family: var(--font-display);
+        }
+
+        /* Semantic Colors */
+        .bear { color: var(--neon-red); }
+        .base { color: var(--text-primary); }
+        .bull { color: var(--neon-green); }
+        .fair { color: var(--neon-orange); }
+
+        /* --- TABLES --- */
+        table { width: 100%; border-collapse: collapse; }
+        th {
+            text-align: left;
+            padding: 10px 5px;
+            color: var(--text-muted);
+            font-family: var(--font-display);
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        td {
+            padding: 10px 5px;
+            font-family: var(--font-display);
+            font-size: 0.85rem;
+            border-bottom: 1px solid rgba(255,255,255,0.02);
+        }
+        tr:last-child td { border-bottom: none; }
+        
+        .metric-label { color: var(--text-muted); font-size: 0.8rem; }
+        .metric-val { text-align: right; color: var(--text-primary); }
+
+        /* --- RESPONSIVE --- */
+        @media (max-width: 1024px) {
+            .main-grid { grid-template-columns: 1fr; }
+            .results-summary { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="boot-screen">
+        <div class="boot-loader"></div>
+        <button class="boot-btn" onclick="initializeSystem()">Initialize Core</button>
+    </div>
+
+    <div class="container" id="main-interface">
+        
+        <div class="glass-panel alive" id="header-panel" style="display:flex; justify-content:space-between; align-items:end;">
+            <div>
+                <h1 style="margin:0; font-family: var(--font-display); font-size: 1.5rem; text-transform: uppercase; letter-spacing: 4px;">
+                    MSTR <span style="color:var(--neon-purple)">Valuation Terminal</span>
+                </h1>
+                <p style="margin: 5px 0 0 0; color: var(--text-muted); font-size: 0.8rem; font-family: var(--font-display);">
+                    V2.3 // Target Price Logic
+                </p>
+            </div>
+            <div style="text-align:right;">
+                <div style="font-size:0.7rem; color:var(--text-muted); font-family:var(--font-display);">MODEL STATUS</div>
+                <div style="color:var(--neon-green); font-size:0.8rem; font-family:var(--font-display);">● ONLINE</div>
+            </div>
+        </div>
+
+        <div class="main-grid">
+            
+            <div class="glass-panel" id="controls-panel">
+                <h3>Simulation Parameters <span class="panel-badge">INPUTS</span></h3>
+                <div class="controls-scroll">
+                    
+                    <div class="control-group">
+                        <div class="group-header">
+                            <span class="dot" style="background:var(--neon-orange)"></span> BITCOIN PHYSICS
+                        </div>
+                        
+                        <div class="input-row">
+                            <label>
+                                Current Price ($)
+                                <span id="btcLiveTag" class="live-tag">LIVE</span>
+                            </label>
+                            <input type="number" id="currentBtcPrice" value="88000" step="100">
+                        </div>
+
+                        <div class="input-row">
+                            <label>Annual Volatility <span id="volatilityDisplay" class="value-display">65%</span></label>
+                            <input type="range" id="btcVolatility" min="30" max="120" step="5" value="65">
+                        </div>
+
+                        <div class="input-row">
+                            <label>Time Horizon (Years) <span id="yearsDisplay" class="value-display">1.0</span></label>
+                            <input type="range" id="timeHorizon" min="0.5" max="5" step="0.5" value="1">
+                        </div>
+
+                        <div class="input-row">
+                            <label>Target BTC Price (End of Period) <span id="driftDisplay" class="value-display">$120,000</span></label>
+                            <input type="range" id="btcTargetPrice" min="10000" max="1000000" step="1000" value="120000">
+                            <div style="font-size:0.65rem; color:var(--text-muted); margin-top:4px; display:flex; justify-content:space-between;">
+                                <span>$10k (Bear)</span>
+                                <span>$1M (Moon)</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <div class="group-header">
+                            <span class="dot" style="background:var(--neon-red)"></span> CORPORATE STRUCTURE
+                        </div>
+                        
+                        <div class="input-row">
+                            <label>Current BTC Holdings</label>
+                            <input type="number" id="currentBtcHoldings" value="671268">
+                            <div style="font-size:0.65rem; color:var(--text-muted); margin-top:2px;">Last updated: Dec 2025</div>
+                        </div>
+                        
+                        <div class="input-row">
+                            <label>Shares Outstanding (M)</label>
+                            <input type="number" id="currentShares" value="287.4" step="0.1">
+                        </div>
+
+                        <div class="input-row">
+                            <label>Net Nominal Debt ($B)</label>
+                            <input type="number" id="netDebt" value="8.2" step="0.1">
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <div class="group-header">
+                            <span class="dot" style="background:var(--neon-blue)"></span> ACCRETION DYNAMICS
+                        </div>
+
+                        <div class="input-row">
+                            <label>BTC Yield Target <span id="btcYieldDisplay" class="value-display">6%</span></label>
+                            <input type="range" id="btcYield" min="0" max="20" step="1" value="6">
+                            <div style="font-size:0.65rem; color:var(--text-muted); margin-top:4px;">"Intelligent Leverage" accretion</div>
+                        </div>
+
+                        <div class="input-row">
+                            <label>Share Dilution (Annual) <span id="dilutionDisplay" class="value-display">5%</span></label>
+                            <input type="range" id="shareDilution" min="0" max="20" step="1" value="5">
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <div class="group-header">
+                            <span class="dot" style="background:var(--neon-purple)"></span> PREMIUM LOGIC
+                        </div>
+                        <div style="font-size:0.7rem; color:var(--text-muted); margin-bottom:10px; line-height:1.4;">
+                            Target Premium over NAV. The model dynamically adjusts this based on BTC momentum.
+                        </div>
+                        <div class="input-row">
+                            <label>Base Premium Multiple <span id="navBaseDisplay" class="value-display">2.0x</span></label>
+                            <input type="range" id="navMultipleBase" min="1.0" max="4.0" step="0.1" value="2.0">
+                        </div>
+                        <div class="input-row">
+                            <label>Sensitivity <span id="sensitivityDisplay" class="value-display">High</span></label>
+                            <input type="range" id="premiumSensitivity" min="0" max="1" step="0.1" value="0.5">
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <div class="group-header">
+                            <span class="dot" style="background:#fff"></span> ENGINE
+                        </div>
+                        <div class="input-row">
+                            <label>Iterations <span id="iterationsDisplay" class="value-display">10k</span></label>
+                            <input type="range" id="iterations" min="5000" max="50000" step="5000" value="10000">
+                        </div>
+                    </div>
+                </div>
+                
+                <button class="run-button" onclick="runSimulationUI(event)">
+                    Execute Simulation
+                </button>
+            </div>
+
+            <div class="results-col">
+                
+                <div class="results-summary">
+                    <div class="result-card bear">
+                        <h4>Bear Case (P10)</h4>
+                        <div class="price" id="bearPrice">---</div>
+                        <div class="subtext" id="bearReturn">---</div>
+                    </div>
+                    <div class="result-card base">
+                        <h4>Base Case (P50)</h4>
+                        <div class="price" id="basePrice">---</div>
+                        <div class="subtext" id="baseReturn">---</div>
+                    </div>
+                    <div class="result-card bull">
+                        <h4>Bull Case (P90)</h4>
+                        <div class="price" id="bullPrice">---</div>
+                        <div class="subtext" id="bullReturn">---</div>
+                    </div>
+                     <div class="result-card fair" style="border-color: var(--neon-orange);">
+                        <h4>Implied Fair NAV</h4>
+                        <div class="price" id="fairPrice">---</div>
+                        <div class="subtext">Fundamental Value</div>
+                    </div>
+                </div>
+
+                <div class="glass-panel" id="dist-panel">
+                    <h3>Price Distribution Density <span class="panel-badge">MONTE CARLO</span></h3>
+                    <div style="height: 280px;">
+                        <canvas id="distributionChart"></canvas>
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 25px;">
+                    <div class="glass-panel" style="margin-bottom:0;">
+                        <h3>Probabilities <span class="panel-badge">TARGETS</span></h3>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Share Price Target</th>
+                                    <th style="text-align:right">Probability</th>
+                                </tr>
+                            </thead>
+                            <tbody id="probabilityTableBody">
+                                </tbody>
+                        </table>
+                    </div>
+
+                    <div class="glass-panel" style="margin-bottom:0;">
+                        <h3>Model Diagnostics <span class="panel-badge">OUTPUTS</span></h3>
+                        <table>
+                            <tbody>
+                                <tr>
+                                    <td class="metric-label">Expected BTC Price</td>
+                                    <td class="metric-val" id="diagBtc">---</td>
+                                </tr>
+                                <tr>
+                                    <td class="metric-label">Avg. NAV Premium</td>
+                                    <td class="metric-val" id="diagPremium">---</td>
+                                </tr>
+                                <tr>
+                                    <td class="metric-label">Terminal BTC Holdings</td>
+                                    <td class="metric-val" id="diagHoldings">---</td>
+                                </tr>
+                                <tr>
+                                    <td class="metric-label">Terminal Shares</td>
+                                    <td class="metric-val" id="diagShares">---</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- AUDIO ENGINE ---
+        class SoundFX {
+            constructor() {
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                this.enabled = true;
+            }
+            resume() { if (this.ctx.state === 'suspended') this.ctx.resume(); }
+            playTone(freq, type, duration, vol = 0.05) {
+                if (!this.enabled) return;
+                this.resume();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+                gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + duration);
+            }
+            playClick() { this.playTone(800, 'sine', 0.1, 0.05); }
+            playSuccess() {
+                setTimeout(() => this.playTone(400, 'sine', 0.2, 0.05), 0);
+                setTimeout(() => this.playTone(600, 'sine', 0.4, 0.05), 100);
+            }
+        }
+        const fx = new SoundFX();
+
+        // --- CHART SETUP ---
+        Chart.defaults.color = '#666';
+        Chart.defaults.borderColor = 'rgba(255,255,255,0.05)';
+        Chart.defaults.font.family = '"JetBrains Mono", monospace';
+        let distChart = null;
+
+        // --- STATE MANAGEMENT ---
+        function getVal(id) { return parseFloat(document.getElementById(id).value); }
+        function setTxt(id, txt) { document.getElementById(id).innerText = txt; }
+        function setVal(id, val) { document.getElementById(id).value = val; }
+
+        function updateDisplays() {
+            setTxt('volatilityDisplay', getVal('btcVolatility') + '%');
+            setTxt('yearsDisplay', getVal('timeHorizon') + ' Yrs');
+            
+            // UPDATED: Show Target Price formatted as Currency
+            const targetP = getVal('btcTargetPrice');
+            setTxt('driftDisplay', '$' + targetP.toLocaleString());
+            
+            setTxt('btcYieldDisplay', getVal('btcYield') + '%');
+            setTxt('dilutionDisplay', getVal('shareDilution') + '%');
+            setTxt('navBaseDisplay', getVal('navMultipleBase').toFixed(1) + 'x');
+            setTxt('iterationsDisplay', (getVal('iterations')/1000).toFixed(0) + 'k');
+            
+            const sense = getVal('premiumSensitivity');
+            setTxt('sensitivityDisplay', sense > 0.7 ? 'High' : (sense < 0.3 ? 'Low' : 'Med'));
+        }
+
+        document.querySelectorAll('input').forEach(input => {
+            input.addEventListener('input', () => {
+                updateDisplays();
+                runAutoSimulation();
+            });
+        });
+
+        // --- API DATA ENGINE ---
+        async function fetchLiveData() {
+            try {
+                // Fetch BTC Price from CoinGecko Public API
+                const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+                const data = await response.json();
+                
+                if(data && data.bitcoin && data.bitcoin.usd) {
+                    const btcPrice = data.bitcoin.usd;
+                    setVal('currentBtcPrice', btcPrice);
+                    document.getElementById('btcLiveTag').classList.add('active');
+                }
+                
+                runSimulationUI(null);
+
+            } catch (error) {
+                console.warn("API Fetch Failed - Using default/cached values", error);
+            }
+        }
+
+        // --- MATH CORE ---
+        // Box-Muller transform for normal distribution
+        function randn_bm() {
+            let u = 0, v = 0;
+            while(u === 0) u = Math.random();
+            while(v === 0) v = Math.random();
+            return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+        }
+
+        // Geometric Brownian Motion for BTC
+        function simulateBTC(S0, mu, sigma, T) {
+            const drift = (mu - 0.5 * sigma * sigma) * T;
+            const shock = sigma * Math.sqrt(T) * randn_bm();
+            return S0 * Math.exp(drift + shock);
+        }
+
+        // MONTE CARLO ENGINE
+        function runSimulationLogic() {
+            // Get inputs
+            const currentBtc = getVal('currentBtcPrice');
+            const targetBtc = getVal('btcTargetPrice');
+            const timeT = getVal('timeHorizon');
+            
+            // Calculate Implied Drift (Mu) from Target Price
+            // Formula: ExpectedValue = S0 * e^(mu * t)
+            // mu = ln(Target / S0) / t
+            // This centers the probability distribution around the user's target price.
+            const impliedDrift = Math.log(targetBtc / currentBtc) / timeT;
+
+            const params = {
+                btcPrice: currentBtc,
+                volatility: getVal('btcVolatility') / 100,
+                time: timeT,
+                drift: impliedDrift, // Use derived drift
+                
+                holdings: getVal('currentBtcHoldings'),
+                shares: getVal('currentShares') * 1e6, 
+                debt: getVal('netDebt') * 1e9,         
+                
+                btcYield: getVal('btcYield') / 100,
+                dilution: getVal('shareDilution') / 100,
+                
+                basePrem: getVal('navMultipleBase'),
+                premSense: getVal('premiumSensitivity'),
+                iterations: getVal('iterations')
+            };
+
+            const results = [];
+            const navs = [];
+            let totalBtcPrice = 0;
+            let totalPremium = 0;
+
+            const terminalHoldings = params.holdings * Math.pow(1 + params.btcYield, params.time);
+            const terminalShares = params.shares * Math.pow(1 + params.dilution, params.time);
+            const terminalDebt = params.debt; 
+
+            for(let i=0; i<params.iterations; i++) {
+                // 1. Simulate BTC
+                const finalBtc = simulateBTC(params.btcPrice, params.drift, params.volatility, params.time);
+                
+                // 2. Calculate NAV
+                const grossAssets = finalBtc * terminalHoldings;
+                const netAssets = grossAssets - terminalDebt;
+                
+                const navPerShare = Math.max(0, netAssets / terminalShares);
+                
+                // 3. Dynamic Premium Calculation
+                const btcReturn = finalBtc / params.btcPrice;
+                const logReturn = Math.log(btcReturn); 
+                
+                const momentumFactor = 1 + (logReturn * params.premSense); 
+                const premiumNoise = randn_bm() * 0.15; 
+                
+                let actualPremium = params.basePrem * momentumFactor + premiumNoise;
+                actualPremium = Math.max(0.5, Math.min(6.0, actualPremium));
+
+                const sharePrice = navPerShare * actualPremium;
+                
+                results.push(sharePrice);
+                navs.push(navPerShare);
+                totalBtcPrice += finalBtc;
+                totalPremium += actualPremium;
+            }
+
+            // Statistics
+            results.sort((a,b) => a-b);
+            const p10 = results[Math.floor(params.iterations * 0.1)];
+            const p50 = results[Math.floor(params.iterations * 0.5)];
+            const p90 = results[Math.floor(params.iterations * 0.9)];
+            
+            navs.sort((a,b) => a-b);
+            const medianNav = navs[Math.floor(params.iterations * 0.5)];
+
+            return {
+                p10, p50, p90, medianNav,
+                avgBtc: totalBtcPrice / params.iterations,
+                avgPremium: totalPremium / params.iterations,
+                terminalHoldings,
+                terminalShares,
+                dataset: results
+            };
+        }
+
+        // --- UI HANDLERS ---
+        const runAutoSimulation = debounce(() => runSimulationUI(null), 100);
+
+        function debounce(func, wait) {
+            let timeout;
+            return function(...args) {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => func.apply(this, args), wait);
+            };
+        }
+
+        function runSimulationUI(e) {
+            if(e) fx.playClick();
+            
+            setTimeout(() => {
+                const data = runSimulationLogic();
+                updateUI(data);
+                if(e) fx.playSuccess();
+            }, 10);
+        }
+
+        function updateUI(data) {
+            const fmt = n => '$' + Math.round(n).toLocaleString();
+            
+            setTxt('bearPrice', fmt(data.p10));
+            setTxt('basePrice', fmt(data.p50));
+            setTxt('bullPrice', fmt(data.p90));
+            setTxt('fairPrice', fmt(data.medianNav));
+
+            setTxt('diagBtc', fmt(data.avgBtc));
+            setTxt('diagPremium', data.avgPremium.toFixed(2) + 'x');
+            setTxt('diagHoldings', Math.round(data.terminalHoldings).toLocaleString() + ' BTC');
+            setTxt('diagShares', (data.terminalShares/1e6).toFixed(1) + 'M');
+
+            document.getElementById('bearReturn').innerText = "Downside Risk";
+            document.getElementById('baseReturn').innerText = "Median Outcome";
+            document.getElementById('bullReturn').innerText = "Upside Tail";
+
+            renderChart(data.dataset, data.medianNav);
+            renderTable(data.dataset);
+        }
+
+        function renderChart(prices, fairValue) {
+            const ctx = document.getElementById('distributionChart').getContext('2d');
+            
+            const cap = prices[Math.floor(prices.length * 0.98)];
+            const floor = prices[Math.floor(prices.length * 0.02)];
+            
+            const bins = 60;
+            const step = (cap - floor) / bins;
+            const dataBins = new Array(bins).fill(0);
+            const labels = [];
+            
+            for(let i=0; i<bins; i++) {
+                labels.push(Math.round(floor + i*step));
+            }
+
+            prices.forEach(p => {
+                if(p >= floor && p <= cap) {
+                    const idx = Math.floor((p - floor) / step);
+                    if(idx >= 0 && idx < bins) dataBins[idx]++;
+                }
+            });
+
+            if(distChart) distChart.destroy();
+
+            distChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Probability Density',
+                        data: dataBins,
+                        backgroundColor: (ctx) => {
+                            const val = ctx.raw;
+                            const idx = ctx.dataIndex;
+                            return labels[idx] > fairValue * 2 ? '#00ff9d' : 
+                                   (labels[idx] < fairValue ? '#ff0055' : '#00f3ff');
+                        },
+                        barPercentage: 1.0,
+                        categoryPercentage: 1.0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { 
+                        legend: { display: false },
+                        annotation: {
+                            annotations: {
+                                line1: {
+                                    type: 'line',
+                                    xMin: bins * ((fairValue - floor)/(cap-floor)),
+                                    xMax: bins * ((fairValue - floor)/(cap-floor)),
+                                    borderColor: '#ff9f1c',
+                                    borderWidth: 2,
+                                    borderDash: [5, 5],
+                                    label: { content: 'Fair NAV', display: true, color: '#ff9f1c', position: 'start' }
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { display: true, grid: { display: false }, ticks: { color: '#666', maxTicksLimit: 8 } },
+                        y: { display: false }
+                    },
+                    animation: false
+                }
+            });
+        }
+
+        function renderTable(prices) {
+            const p50 = prices[Math.floor(prices.length*0.5)];
+            const targets = [
+                Math.round(p50 * 0.5 / 50)*50,
+                Math.round(p50 * 0.8 / 50)*50,
+                Math.round(p50 / 50)*50,
+                Math.round(p50 * 1.5 / 50)*50,
+                Math.round(p50 * 2.0 / 50)*50
+            ].sort((a,b) => a-b);
+            
+            const uniqueTargets = [...new Set(targets)];
+            const tbody = document.getElementById('probabilityTableBody');
+            tbody.innerHTML = '';
+
+            uniqueTargets.forEach(t => {
+                const count = prices.filter(p => p >= t).length;
+                const prob = (count / prices.length) * 100;
+                let color = '#8899a6'; 
+                if(prob > 80) color = '#00ff9d';
+                else if(prob > 50) color = '#00f3ff';
+                else if(prob < 20) color = '#ff0055';
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>$${t.toLocaleString()}</td><td style="text-align:right; color:${color}; font-weight:bold;">${prob.toFixed(1)}%</td>`;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // --- INIT ---
+        function initializeSystem() {
+            document.getElementById('boot-screen').style.opacity = 0;
+            setTimeout(() => {
+                document.getElementById('boot-screen').style.display = 'none';
+                document.getElementById('main-interface').classList.add('visible');
+                updateDisplays();
+                fetchLiveData(); // Auto-fetch on boot
+            }, 500);
+        }
+    </script>
+</body>
+</html>
